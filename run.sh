@@ -7,13 +7,31 @@ MONGODB_PORT=${MONGODB_PORT_1_27017_TCP_PORT:-${MONGODB_PORT}}
 MONGODB_USER=${MONGODB_USER:-${MONGODB_ENV_MONGODB_USER}}
 MONGODB_PASS=${MONGODB_PASS:-${MONGODB_ENV_MONGODB_PASS}}
 
+[[ ( -z "${MONGODB_HOST}" ) ]] && MONGODB_HOST='mongodb'
+[[ ( -z "${MONGODB_PORT}" ) ]] && MONGODB_PORT='27017'
 [[ ( -z "${MONGODB_USER}" ) && ( -n "${MONGODB_PASS}" ) ]] && MONGODB_USER='admin'
 
 [[ ( -n "${MONGODB_USER}" ) ]] && USER_STR=" --username ${MONGODB_USER}"
 [[ ( -n "${MONGODB_PASS}" ) ]] && PASS_STR=" --password ${MONGODB_PASS}"
-[[ ( -n "${MONGODB_DB}" ) ]] && USER_STR=" --db ${MONGODB_DB}"
+[[ ( -n "${MONGODB_DB}" ) ]] && DB_STR=" --db ${MONGODB_DB}"
 
-BACKUP_CMD="mongodump --out /backup/"'${BACKUP_NAME}'" --host ${MONGODB_HOST} --port ${MONGODB_PORT} ${USER_STR}${PASS_STR}${DB_STR} ${EXTRA_OPTS}"
+use_gzip_backup () {
+    if [ -n "${USE_GZIP}" ]; then
+        echo ".gz --gzip"
+    else
+        echo ""
+    fi
+}
+
+use_archive_backup () {
+    if [ -n "${USE_ARCHIVE}" ]; then
+        echo "--archive="
+    else
+        echo "--out "
+    fi
+}
+
+BACKUP_CMD="mongodump $(use_archive_backup)/backup/"'${BACKUP_NAME}'"$(use_gzip_backup) --host ${MONGODB_HOST} --port ${MONGODB_PORT} ${USER_STR}${PASS_STR}${DB_STR}  ${EXTRA_OPTS}"
 
 echo "=> Creating backup script"
 rm -f /backup.sh
@@ -23,7 +41,7 @@ MAX_BACKUPS=${MAX_BACKUPS}
 BACKUP_NAME=\$(date +\%Y.\%m.\%d.\%H\%M\%S)
 
 echo "=> Backup started"
-if ${BACKUP_CMD} ;then
+if ${BACKUP_CMD}; then
     echo "   Backup succeeded"
 else
     echo "   Backup failed"
@@ -42,12 +60,30 @@ echo "=> Backup done"
 EOF
 chmod +x /backup.sh
 
+use_gzip_restore () {
+    if [ -n "${USE_GZIP}" ]; then
+        echo "--gzip"
+    fi
+}
+
+use_archive_restore () {
+    if [ -n "${USE_ARCHIVE}" ]; then
+        echo "--archive="
+    fi
+}
+
+RESTORE_CMD="mongorestore --objcheck --host ${MONGODB_HOST} --port ${MONGODB_PORT} ${USER_STR}${PASS_STR} $(use_gzip_restore) $(use_archive_restore)"
+
 echo "=> Creating restore script"
 rm -f /restore.sh
 cat <<EOF >> /restore.sh
 #!/bin/bash
 echo "=> Restore database from \$1"
-if mongorestore --host ${MONGODB_HOST} --port ${MONGODB_PORT} ${USER_STR}${PASS_STR} ${EXTRA_OPTS_RESTORE} \$1; then
+name="\$1"
+shift 1
+echo "=> Restore database from \$name"
+echo \$*
+if  ${RESTORE_CMD}\$*/backup/\$name; then
     echo "   Restore succeeded"
 else
     echo "   Restore failed"
@@ -55,6 +91,8 @@ fi
 echo "=> Done"
 EOF
 chmod +x /restore.sh
+ln -s /restore.sh /usr/bin/restore
+ln -s /backup.sh /usr/bin/backup
 
 touch /mongo_backup.log
 tail -F /mongo_backup.log &
